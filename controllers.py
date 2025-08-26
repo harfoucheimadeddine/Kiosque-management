@@ -429,9 +429,8 @@ class Controller(MainUI):
         else: # Add to bill without saving to database (could be existing or custom for bill only)
             item = None
             if item_details["id"] != -1:
-                # Fetch all items and find the specific one
-                all_items = models.get_items()
-                item = next((dict(i) for i in all_items if i['id'] == item_details["id"]), None)
+                # Using the new models.get_item function
+                item = models.get_item(item_details["id"])
 
             purchase_price = item["purchase_price"] if item else item_details["price"]
 
@@ -471,7 +470,7 @@ class Controller(MainUI):
         self.in_barcode.setFocus()
 
     def _bill_find_and_add_item_dialog(self):
-        """Unified method for 'بحث' and 'إضافة إلى الفاتورة' buttons."""
+        """Unified method for 'بحث' و 'إضافة إلى الفاتورة' buttons."""
         barcode = self.in_barcode.text().strip()
         name = self.in_name.text().strip()
 
@@ -544,11 +543,8 @@ class Controller(MainUI):
         # Check for stock before adding, even if it's an existing item from the dialog
         # For custom items, no stock check is needed.
         if not is_custom and item_id != -1:
-            db_item = None
-            # Fetch all items and find the specific one
-            all_items = models.get_items()
-            db_item = next((dict(i) for i in all_items if i['id'] == item_id), None)
-
+            db_item = models.get_item(item_id) # Use the new models.get_item function
+            
             if db_item:
                 available_stock = max(0, db_item["stock_count"] or 0)
                 if qty > available_stock:
@@ -680,17 +676,20 @@ class Controller(MainUI):
         <head>
         <meta charset="UTF-8">
         <style>
-            body {{ font-family: Arial, sans-serif; direction: rtl; text-align: right; margin: 20px; font-size: 14px; }} /* Base font size increased */
-            .header {{ text-align: center; margin-bottom: 20px; border-bottom: 1px dashed #000; padding-bottom: 10px; }}
-            .shop-name {{ font-size: 28px; font-weight: bold; margin-bottom: 5px; }} /* Increased font size */
-            .contact {{ font-size: 16px; margin-bottom: 2px; }} /* Increased font size */
-            .receipt-info {{ margin: 15px 0; border-bottom: 1px dashed #000; padding-bottom: 10px; }}
-            .info-line {{ margin-bottom: 5px; font-size: 16px; }} /* Increased font size */
-            .items-table {{ width: 100%; border-collapse: collapse; margin: 15px 0; }}
-            .items-table th, .items-table td {{ border: 1px solid #000; padding: 8px; text-align: right; font-size: 14px; }} /* Increased font size */
+            /* IMPORTANT: PyQt's QTextDocument for printing can scale 'px' units unexpectedly.
+               These values are drastically increased to ensure visibility, assuming
+               a strong scaling down by the printing engine. */
+            body {{ font-family: Arial, sans-serif; direction: rtl; text-align: right; margin: 50px; font-size: 60px; }}
+            .header {{ text-align: center; margin-bottom: 250px; border-bottom: 20px dashed #000; padding-bottom: 150px; }}
+            .shop-name {{ font-size: 320px; font-weight: bold; margin-bottom: 100px; }}
+            .contact {{ font-size: 200px; margin-bottom: 50px; }}
+            .receipt-info {{ margin: 50px 0; border-bottom: 20px dashed #000; padding-bottom: 150px; }}
+            .info-line {{ margin-bottom: 75px; font-size: 200px; }}
+            .items-table {{ width: 100%; border-collapse: collapse; margin: 50px 0; }}
+            .items-table th, .items-table td {{ border: 3px solid #000; padding: 25px; text-align: right; font-size: 60px; }}
             .items-table th {{ background-color: #f2f2f2; font-weight: bold; }}
-            .total-row {{ font-weight: bold; font-size: 18px; text-align: left; padding-top: 10px; }} /* Increased font size */
-            .footer {{ margin-top: 30px; text-align: center; font-size: 14px; border-top: 1px dashed #000; padding-top: 10px; }} /* Increased font size */
+            .total-row {{ font-weight: bold; font-size: 90px; text-align: left; padding-top: 20px; }}
+            .footer {{ margin-top: 100px; text-align: center; font-size: 60px; border-top: 5px dashed #000; padding-top: 40px; }}
         </style>
         </head>
         <body>
