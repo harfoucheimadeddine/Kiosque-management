@@ -1,4 +1,4 @@
-# ui_main.py (Part 1 - Stock Tab)
+# ui_main.py - Modern UI with Purchase Price Feature
 from PyQt5.QtWidgets import (
     QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QDoubleSpinBox, QFileDialog, QTableWidget, QTableWidgetItem,
@@ -344,7 +344,7 @@ class MainUI(QWidget):
         row1.addWidget(self.stk_barcode, 1)
         form_layout.addLayout(row1)
 
-        # Second row - Price, Quantity, Category
+        # Second row - Price, Purchase Price, Quantity, Category
         row2 = QHBoxLayout()
         row2.setSpacing(10)
 
@@ -353,10 +353,28 @@ class MainUI(QWidget):
         self.stk_price.setDecimals(2)
         self.stk_price.setMinimumHeight(45)
 
+        # NEW: Purchase price field
+        self.stk_purchase_price = QDoubleSpinBox()
+        self.stk_purchase_price.setMaximum(10**9)
+        self.stk_purchase_price.setDecimals(2)
+        self.stk_purchase_price.setMinimumHeight(45)
+
         self.stk_qty = QDoubleSpinBox()
         self.stk_qty.setMaximum(10**9)
         self.stk_qty.setDecimals(3)
         self.stk_qty.setMinimumHeight(45)
+
+        row2.addWidget(QLabel("السعر:"), 0)
+        row2.addWidget(self.stk_price, 1)
+        row2.addWidget(QLabel("سعر الشراء:"), 0)
+        row2.addWidget(self.stk_purchase_price, 1)
+        row2.addWidget(QLabel("المخزون:"), 0)
+        row2.addWidget(self.stk_qty, 1)
+        form_layout.addLayout(row2)
+
+        # Third row - Category
+        row3 = QHBoxLayout()
+        row3.setSpacing(10)
 
         self.stk_cat = QComboBox()
         self.stk_cat.setMinimumHeight(45)
@@ -365,18 +383,14 @@ class MainUI(QWidget):
         self.btn_stk_new_cat.setMinimumHeight(45)
         self.btn_stk_new_cat.setMinimumWidth(100)
 
-        row2.addWidget(QLabel("السعر:"), 0)
-        row2.addWidget(self.stk_price, 1)
-        row2.addWidget(QLabel("المخزون:"), 0)
-        row2.addWidget(self.stk_qty, 1)
-        row2.addWidget(QLabel("التصنيف:"), 0)
-        row2.addWidget(self.stk_cat, 1)
-        row2.addWidget(self.btn_stk_new_cat, 0)
-        form_layout.addLayout(row2)
+        row3.addWidget(QLabel("التصنيف:"), 0)
+        row3.addWidget(self.stk_cat, 2)
+        row3.addWidget(self.btn_stk_new_cat, 0)
+        form_layout.addLayout(row3)
 
-        # Third row - Photo path and buttons
-        row3 = QHBoxLayout()
-        row3.setSpacing(10)
+        # Fourth row - Photo path and buttons
+        row4 = QHBoxLayout()
+        row4.setSpacing(10)
 
         self.stk_photo = QLineEdit()
         self.stk_photo.setPlaceholderText("مسار الصورة")
@@ -392,22 +406,22 @@ class MainUI(QWidget):
         self.btn_stk_camera.setMinimumWidth(140)
 
         # Preview image
-        self.preview = QLabel("لا توجد صورة")
-        self.preview.setFixedSize(120, 120)
-        self.preview.setStyleSheet("""
+        self.lbl_preview = QLabel("لا توجد صورة")
+        self.lbl_preview.setFixedSize(120, 120)
+        self.lbl_preview.setStyleSheet("""
             border: 2px solid #64748b; 
             border-radius: 8px; 
             background-color: #334155;
             color: #cbd5e1;
         """)
-        self.preview.setAlignment(Qt.AlignCenter)
+        self.lbl_preview.setAlignment(Qt.AlignCenter)
 
-        row3.addWidget(QLabel("الصورة:"), 0)
-        row3.addWidget(self.stk_photo, 2)
-        row3.addWidget(self.btn_stk_browse, 0)
-        row3.addWidget(self.btn_stk_camera, 0)
-        row3.addWidget(self.preview, 0)
-        form_layout.addLayout(row3)
+        row4.addWidget(QLabel("الصورة:"), 0)
+        row4.addWidget(self.stk_photo, 2)
+        row4.addWidget(self.btn_stk_browse, 0)
+        row4.addWidget(self.btn_stk_camera, 0)
+        row4.addWidget(self.lbl_preview, 0)
+        form_layout.addLayout(row4)
 
         # Action buttons
         btn_row = QHBoxLayout()
@@ -441,20 +455,21 @@ class MainUI(QWidget):
 
         outer.addWidget(form_group)
 
-        # Stock table with pagination
+        # Stock table with purchase price column
         table_group = QGroupBox("قائمة المخزون")
         table_layout = QVBoxLayout(table_group)
 
-        self.tbl_stock = QTableWidget(0, 10)
+        self.tbl_stock = QTableWidget(0, 11)  # Added one more column for purchase price
         self.tbl_stock.setHorizontalHeaderLabels([
             "ID", "الاسم", "التصنيف", "الباركود", "السعر", 
-            "المخزون", "الحالة", "الصورة", "تاريخ الإضافة", "cat_id"
+            "المخزون", "الحالة", "الصورة", "تاريخ الإضافة", "cat_id", "سعر الشراء"
         ])
         
         # Hide unnecessary columns
         self.tbl_stock.horizontalHeader().setSectionHidden(0, True)  # ID
         self.tbl_stock.horizontalHeader().setSectionHidden(7, True)  # Photo path
         self.tbl_stock.horizontalHeader().setSectionHidden(9, True)  # cat_id
+        self.tbl_stock.horizontalHeader().setSectionHidden(10, True) # Purchase price (hidden in stock view)
         
         # Set responsive behavior
         header = self.tbl_stock.horizontalHeader()
@@ -474,31 +489,10 @@ class MainUI(QWidget):
         self.tbl_stock.setEditTriggers(QAbstractItemView.NoEditTriggers)
         
         table_layout.addWidget(self.tbl_stock)
-        
-        # Pagination controls for stock
-        pagination_layout = QHBoxLayout()
-        
-        self.btn_stk_prev = QPushButton("السابق")
-        self.btn_stk_prev.setObjectName("secondary")
-        self.btn_stk_prev.setMinimumHeight(35)
-        
-        self.lbl_stk_page = QLabel("الصفحة 1 من 1")
-        self.lbl_stk_page.setAlignment(Qt.AlignCenter)
-        
-        self.btn_stk_next = QPushButton("التالي")
-        self.btn_stk_next.setObjectName("secondary")
-        self.btn_stk_next.setMinimumHeight(35)
-        
-        pagination_layout.addWidget(self.btn_stk_prev)
-        pagination_layout.addWidget(self.lbl_stk_page)
-        pagination_layout.addWidget(self.btn_stk_next)
-        
-        table_layout.addLayout(pagination_layout)
-        
         outer.addWidget(table_group)
 
         self.tabs.addTab(tab, "المخزون")
-        # ui_main.py (Part 2 - Sales and Settings Tabs)
+
     # ---------- Sales Tab ----------
     def _build_sales_tab(self):
         tab = QWidget()
@@ -507,8 +501,8 @@ class MainUI(QWidget):
 
         # KPI Section
         kpi_group = QGroupBox("ملخص المبيعات")
-        kpi_layout = QHBoxLayout(kpi_group)
-        kpi_layout.setSpacing(20)
+        kpi_layout = QVBoxLayout(kpi_group)
+        kpi_layout.setSpacing(15)
 
         # First row of KPIs
         kpi_row1 = QHBoxLayout()
@@ -542,7 +536,7 @@ class MainUI(QWidget):
         
         outer.addWidget(kpi_group)
 
-        # Sales table with pagination
+        # Sales table
         sales_group = QGroupBox("قائمة المبيعات")
         sales_layout = QVBoxLayout(sales_group)
 
@@ -562,26 +556,6 @@ class MainUI(QWidget):
         self.tbl_sales.setMaximumHeight(250)
         
         sales_layout.addWidget(self.tbl_sales)
-
-        # Pagination controls for sales
-        sales_pagination_layout = QHBoxLayout()
-        
-        self.btn_sales_prev = QPushButton("السابق")
-        self.btn_sales_prev.setObjectName("secondary")
-        self.btn_sales_prev.setMinimumHeight(35)
-        
-        self.lbl_sales_page = QLabel("الصفحة 1 من 1")
-        self.lbl_sales_page.setAlignment(Qt.AlignCenter)
-        
-        self.btn_sales_next = QPushButton("التالي")
-        self.btn_sales_next.setObjectName("secondary")
-        self.btn_sales_next.setMinimumHeight(35)
-        
-        sales_pagination_layout.addWidget(self.btn_sales_prev)
-        sales_pagination_layout.addWidget(self.lbl_sales_page)
-        sales_pagination_layout.addWidget(self.btn_sales_next)
-        
-        sales_layout.addLayout(sales_pagination_layout)
 
         # Sales action buttons
         sales_btn_row = QHBoxLayout()
@@ -608,25 +582,27 @@ class MainUI(QWidget):
 
         outer.addWidget(sales_group)
 
-        # Sale details table
+        # Sale details table with purchase price and profit columns
         details_group = QGroupBox("تفاصيل العملية المحددة")
         details_layout = QVBoxLayout(details_group)
 
-        self.tbl_sale_details = QTableWidget(0, 6)
+        self.tbl_sale_details = QTableWidget(0, 8)  # Added columns for purchase price and profit
         self.tbl_sale_details.setHorizontalHeaderLabels([
-            "ID Det", "الاسم", "الكمية", "سعر الوحدة", "الإجمالي", "الباركود"
+            "ID Det", "الاسم", "الكمية", "سعر البيع", "الإجمالي", "سعر الشراء", "item_id", "sale_id"
         ])
         
-        # Hide ID and barcode columns for cleaner display
-        self.tbl_sale_details.horizontalHeader().setSectionHidden(0, True)
-        self.tbl_sale_details.horizontalHeader().setSectionHidden(5, True)
+        # Hide ID columns for cleaner display
+        self.tbl_sale_details.horizontalHeader().setSectionHidden(0, True)  # Detail ID
+        self.tbl_sale_details.horizontalHeader().setSectionHidden(6, True)  # Item ID
+        self.tbl_sale_details.horizontalHeader().setSectionHidden(7, True)  # Sale ID
         
         # Set responsive behavior
         header2 = self.tbl_sale_details.horizontalHeader()
         header2.setSectionResizeMode(1, QHeaderView.Stretch)          # Name stretches
         header2.setSectionResizeMode(2, QHeaderView.ResizeToContents) # Quantity
-        header2.setSectionResizeMode(3, QHeaderView.ResizeToContents) # Price each
+        header2.setSectionResizeMode(3, QHeaderView.ResizeToContents) # Sale price
         header2.setSectionResizeMode(4, QHeaderView.ResizeToContents) # Total
+        header2.setSectionResizeMode(5, QHeaderView.ResizeToContents) # Purchase price
         
         self.tbl_sale_details.setAlternatingRowColors(True)
         self.tbl_sale_details.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -730,15 +706,15 @@ class MainUI(QWidget):
                 pixmap = QPixmap(path)
                 if not pixmap.isNull():
                     scaled_pixmap = pixmap.scaled(
-                        self.preview.width() - 4, 
-                        self.preview.height() - 4, 
+                        self.lbl_preview.width() - 4, 
+                        self.lbl_preview.height() - 4, 
                         Qt.KeepAspectRatio, 
                         Qt.SmoothTransformation
                     )
-                    self.preview.setPixmap(scaled_pixmap)
+                    self.lbl_preview.setPixmap(scaled_pixmap)
                     return
             except:
                 pass
         
-        self.preview.clear()
-        self.preview.setText("لا توجد صورة")
+        self.lbl_preview.clear()
+        self.lbl_preview.setText("لا توجد صورة")

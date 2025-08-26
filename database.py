@@ -1,4 +1,4 @@
-# database.py (fixed typo)
+# database.py (fixed typo and added purchase_price column)
 import sqlite3
 import os
 import threading
@@ -71,7 +71,7 @@ def setup_database():
     );
     """)
 
-    # Items table
+    # Items table with purchase_price
     cur.execute("""
     CREATE TABLE IF NOT EXISTS items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,6 +83,7 @@ def setup_database():
         photo_path TEXT,
         add_date TEXT,
         updated_at TEXT,
+        purchase_price REAL NOT NULL DEFAULT 0,
         FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
     );
     """)
@@ -112,6 +113,12 @@ def setup_database():
     """)
 
     conn.commit()
+
+    # Add purchase_price column if it doesn't exist
+    if not _table_has_column(conn, 'items', 'purchase_price'):
+        print("Adding purchase_price column to items table...")
+        cur.execute("ALTER TABLE items ADD COLUMN purchase_price REAL NOT NULL DEFAULT 0")
+        conn.commit()
 
     # Check if created_at column exists in sales table, add if not
     if not _table_has_column(conn, 'sales', 'created_at'):
@@ -197,6 +204,7 @@ def setup_database():
         "CREATE INDEX IF NOT EXISTS idx_sale_details_item_id ON sale_details(item_id);",
         "CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);",  # Added for faster search
         "CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at);",  # Added for faster date queries
+        "CREATE INDEX IF NOT EXISTS idx_items_purchase_price ON items(purchase_price);",  # Added for purchase price queries
     ]
     for sql in indexes:
         try:

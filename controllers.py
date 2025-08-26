@@ -1,4 +1,4 @@
-# controllers.py (fixed custom price calculation)
+# controllers.py (fixed custom price calculation and added purchase price feature)
 import os
 from datetime import datetime
 from PyQt5.QtWidgets import QFileDialog, QTableWidgetItem, QMessageBox, QInputDialog, QCompleter
@@ -134,7 +134,7 @@ class Controller(MainUI):
                 (self.tbl_bill, [2, 3, 4]),
                 (self.tbl_stock, [2, 3, 4, 5, 6, 8]),
                 (self.tbl_sales, [0, 1, 2]),
-                (self.tbl_sale_details, [2, 3, 4])
+                (self.tbl_sale_details, [2, 3, 4, 5])
             ]
             for table, cols in tables:
                 if table and table.rowCount() > 0:
@@ -184,6 +184,7 @@ class Controller(MainUI):
     def _apply_currency_to_inputs(self):
         self.in_price.setPrefix(f"السعر ({self.currency}): ")
         self.stk_price.setPrefix(f"السعر ({self.currency}): ")
+        self.stk_purchase_price.setPrefix(f"سعر الشراء ({self.currency}): ")
         self.stk_qty.setPrefix("المخزون: ")
         self.in_qty.setPrefix("الكمية: ")
         self._bill_recalc_total()
@@ -255,6 +256,7 @@ class Controller(MainUI):
                 return
             cat_id = self.stk_cat.currentData()
             price = float(self.stk_price.value())
+            purchase_price = float(self.stk_purchase_price.value())
             qty = float(self.stk_qty.value())
             
             # Prevent negative stock
@@ -263,7 +265,7 @@ class Controller(MainUI):
                 return
                 
             photo = self.stk_photo.text().strip() or None
-            models.add_item(name, cat_id, barcode or None, price, qty, photo)
+            models.add_item(name, cat_id, barcode or None, price, qty, photo, purchase_price=purchase_price)
             self._load_stock_table()
             self.msg("تم", "تمت إضافة الصنف.")
             self._clear_stock_form()
@@ -287,6 +289,7 @@ class Controller(MainUI):
                 return
             cat_id = self.stk_cat.currentData()
             price = float(self.stk_price.value())
+            purchase_price = float(self.stk_purchase_price.value())
             qty = float(self.stk_qty.value())
             
             # Prevent negative stock
@@ -295,7 +298,7 @@ class Controller(MainUI):
                 return
                 
             photo = self.stk_photo.text().strip() or None
-            models.update_item(item_id, name, cat_id, barcode or None, price, qty, photo)
+            models.update_item(item_id, name, cat_id, barcode or None, price, qty, photo, purchase_price=purchase_price)
             self._load_stock_table()
             self.msg("تم", "تم تعديل الصنف.")
         except Exception as e:
@@ -320,6 +323,7 @@ class Controller(MainUI):
         self.stk_name.clear()
         self.stk_barcode.clear()
         self.stk_price.setValue(0)
+        self.stk_purchase_price.setValue(0)
         self.stk_qty.setValue(0)
         self.stk_photo.clear()
         self.set_preview_image("")
@@ -336,6 +340,10 @@ class Controller(MainUI):
         self.stk_barcode.setText(self.tbl_stock.item(row, 3).text())
         self.stk_price.setValue(float(self.tbl_stock.item(row, 4).text()))
         self.stk_qty.setValue(float(self.tbl_stock.item(row, 5).text()))
+        # Get purchase price from column 10 (hidden)
+        if self.tbl_stock.columnCount() > 10:
+            purchase_price = float(self.tbl_stock.item(row, 10).text() or "0")
+            self.stk_purchase_price.setValue(purchase_price)
         self.stk_photo.setText(self.tbl_stock.item(row, 7).text())
         self.set_preview_image(self.tbl_stock.item(row, 7).text())
 
@@ -368,6 +376,8 @@ class Controller(MainUI):
             self.tbl_stock.setItem(row, 7, QTableWidgetItem(r["photo_path"] or ""))
             self.tbl_stock.setItem(row, 8, QTableWidgetItem(r["add_date"] or ""))
             self.tbl_stock.setItem(row, 9, QTableWidgetItem(str(r["category_id"] or "")))
+            # Add purchase price column (hidden)
+            self.tbl_stock.setItem(row, 10, QTableWidgetItem(str(r["purchase_price"] or "0")))
             self.tbl_stock.setRowHeight(row, 40)
         self._update_table_responsiveness()
 
@@ -774,6 +784,22 @@ class Controller(MainUI):
     def _load_sales_tab(self):
         sales = models.get_sales()
         self.tbl_sales.setRowCount(0)
+        
+        # Update KPIs
+        total_sales = models.get_sales_total()
+        today_sales = models.get_sales_summary_today()
+        latest_sale = models.get_latest_sale()
+        
+        self.lbl_total_sales.setText(f"إجمالي المبيعات: {fmt_money(total_sales)} {self.currency}")
+        self.lbl_today_sales.setText(f"مبيعات اليوم: {fmt_money(today_sales)} {self.currency}")
+        
+        if latest_sale:
+            latest_text = f"آخر عملية: #{latest_sale['id']} - {latest_sale['datetime']} - {fmt_money(latest_sale['total_price'])} {self.currency}"
+            self.lbl_latest_sale.setText(latest_text)
+        else:
+            self.lbl_latest_sale.setText("آخر عملية: لا توجد مبيعات")
+        
+        # Load sales table
         for r in sales:
             row = self.tbl_sales.rowCount()
             self.tbl_sales.insertRow(row)
@@ -796,11 +822,21 @@ class Controller(MainUI):
             self.tbl_sale_details.insertRow(row_det)
             self.tbl_sale_details.setItem(row_det, 0, QTableWidgetItem(str(r["id"])))
             self.tbl_sale_details.setItem(row_det, 1, QTableWidgetItem(r["item_name"]))
-            self.tbl_sale_details.setItem(row_det, 2, QTableWidgetItem(fmt_money(r["price_each"])))
-            self.tbl_sale_details.setItem(row_det, 3, QTableWidgetItem(fmt_qty(r["quantity"])))
+            self.tbl_sale_details.setItem(row_det, 2, QTableWidgetItem(fmt_qty(r["quantity"])))
+            self.tbl_sale_details.setItem(row_det, 3, QTableWidgetItem(fmt_money(r["price_each"])))
             self.tbl_sale_details.setItem(row_det, 4, QTableWidgetItem(fmt_money(r["price_each"] * r["quantity"])))
-            self.tbl_sale_details.setItem(row_det, 5, QTableWidgetItem(str(r["item_id"])))
-            self.tbl_sale_details.setItem(row_det, 6, QTableWidgetItem(str(r["sale_id"])))
+            # Add purchase price column (visible in sales tab)
+            purchase_price = r.get("purchase_price", 0) or 0
+            self.tbl_sale_details.setItem(row_det, 5, QTableWidgetItem(fmt_money(purchase_price)))
+            # Calculate profit
+            profit = (r["price_each"] - purchase_price) * r["quantity"]
+            profit_item = QTableWidgetItem(fmt_money(profit))
+            if profit < 0:
+                profit_item.setForeground(Qt.red)
+            else:
+                profit_item.setForeground(Qt.green)
+            self.tbl_sale_details.setItem(row_det, 6, QTableWidgetItem(str(r["item_id"])))
+            self.tbl_sale_details.setItem(row_det, 7, QTableWidgetItem(str(r["sale_id"])))
             self.tbl_sale_details.setRowHeight(row_det, 35)
         self._update_table_responsiveness()
 
@@ -841,12 +877,12 @@ class Controller(MainUI):
             self.msg("تنبيه", "اختر صنفًا للتعديل.")
             return
         detail_id = int(self.tbl_sale_details.item(row, 0).text())
-        item_id = int(self.tbl_sale_details.item(row, 5).text())
-        sale_id = int(self.tbl_sale_details.item(row, 6).text())
+        item_id = int(self.tbl_sale_details.item(row, 6).text())
+        sale_id = int(self.tbl_sale_details.item(row, 7).text())
         
         # Get current values
-        current_qty = float(self.tbl_sale_details.item(row, 3).text())
-        current_price = float(self.tbl_sale_details.item(row, 2).text())
+        current_qty = float(self.tbl_sale_details.item(row, 2).text())
+        current_price = float(self.tbl_sale_details.item(row, 3).text())
         
         # Show dialog for new values
         new_qty, ok1 = QInputDialog.getDouble(self, "الكمية الجديدة", "الكمية:", current_qty, 0.1, 1000, 1)

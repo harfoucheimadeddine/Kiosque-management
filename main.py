@@ -17,8 +17,9 @@ def setup_application():
     app.setApplicationVersion("2.0")
     app.setOrganizationName("Store Management Solutions")
     
-    # Enable high DPI scaling for better display on modern screens
-    app.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    # FIXED: Move high DPI scaling setup BEFORE QApplication creation
+    # This should be done before creating QApplication, but since we already created it,
+    # we'll set the attributes that can still be set
     app.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     
     # Enhanced Arabic font support
@@ -49,7 +50,7 @@ def setup_application():
     
     app.setFont(selected_font)
     
-    # Apply dark theme stylesheet
+    # Apply modern dark theme stylesheet
     app.setStyleSheet(APP_QSS)
     
     return app
@@ -67,6 +68,12 @@ def create_required_directories():
 
 def main():
     """Main application entry point"""
+    # FIXED: Set high DPI scaling BEFORE creating QApplication
+    if hasattr(Qt, 'AA_EnableHighDpiScaling'):
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    if hasattr(Qt, 'AA_UseHighDpiPixmaps'):
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    
     # Setup database
     setup_database()
     

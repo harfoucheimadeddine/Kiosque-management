@@ -37,7 +37,8 @@ def add_category(name: str):
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+        cur.execute("INSERT INTO categories (name, created_at) VALUES (?, ?)", 
+                   (name, datetime.now().isoformat()))
         conn.commit()
     finally:
         conn.close()
@@ -65,30 +66,30 @@ def get_category_by_name(name: str):
         conn.close()
 
 # ---------- Items/Products ----------
-def add_item(name, category_id, barcode, price, stock_count, photo_path, add_date=None):
-    """Add new product item"""
+def add_item(name, category_id, barcode, price, stock_count, photo_path, add_date=None, purchase_price=0):
+    """Add new product item with purchase price"""
     if not add_date:
         add_date = datetime.now().isoformat(timespec="seconds")
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO items (name, category_id, barcode, price, stock_count, photo_path, add_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (name, category_id, barcode, price, stock_count, photo_path, add_date))
+            INSERT INTO items (name, category_id, barcode, price, stock_count, photo_path, add_date, updated_at, purchase_price)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (name, category_id, barcode, price, stock_count, photo_path, add_date, add_date, purchase_price))
         conn.commit()
     finally:
         conn.close()
 
-def update_item(item_id, name, category_id, barcode, price, stock_count, photo_path):
-    """Update existing product item"""
+def update_item(item_id, name, category_id, barcode, price, stock_count, photo_path, purchase_price=0):
+    """Update existing product item with purchase price"""
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute("""
-            UPDATE items SET name=?, category_id=?, barcode=?, price=?, stock_count=?, photo_path=?
+            UPDATE items SET name=?, category_id=?, barcode=?, price=?, stock_count=?, photo_path=?, updated_at=?, purchase_price=?
             WHERE id=?
-        """, (name, category_id, barcode, price, stock_count, photo_path, item_id))
+        """, (name, category_id, barcode, price, stock_count, photo_path, datetime.now().isoformat(), purchase_price, item_id))
         conn.commit()
     finally:
         conn.close()
@@ -110,7 +111,7 @@ def get_items(limit=None, offset=0):
         cur = conn.cursor()
         sql = """
             SELECT i.id, i.name, i.barcode, i.price, i.stock_count, i.photo_path, i.add_date,
-                   c.name AS category_name, i.category_id
+                   c.name AS category_name, i.category_id, i.purchase_price
             FROM items i
             LEFT JOIN categories c ON c.id = i.category_id
             ORDER BY i.id DESC
@@ -144,7 +145,7 @@ def get_item_by_barcode(barcode):
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, name, barcode, price, stock_count, photo_path, category_id
+            SELECT id, name, barcode, price, stock_count, photo_path, category_id, purchase_price
             FROM items WHERE barcode=?
         """, (barcode,))
         row = cur.fetchone()
@@ -158,7 +159,7 @@ def search_items_by_name(name_part, limit=20):
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, name, barcode, price, stock_count, photo_path, category_id
+            SELECT id, name, barcode, price, stock_count, photo_path, category_id, purchase_price
             FROM items 
             WHERE name LIKE ? 
             ORDER BY name
@@ -219,7 +220,8 @@ def add_sale(total_price, dt=None):
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("INSERT INTO sales (datetime, total_price) VALUES (?,?)", (dt, total_price))
+        cur.execute("INSERT INTO sales (datetime, total_price, created_at) VALUES (?,?,?)", 
+                   (dt, total_price, dt))
         sale_id = cur.lastrowid
         conn.commit()
         return sale_id
@@ -232,9 +234,9 @@ def add_sale_detail(sale_id, item_id, quantity, price_each):
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO sale_details (sale_id, item_id, quantity, price_each)
-            VALUES (?, ?, ?, ?)
-        """, (sale_id, item_id, quantity, price_each))
+            INSERT INTO sale_details (sale_id, item_id, quantity, price_each, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (sale_id, item_id, quantity, price_each, datetime.now().isoformat()))
         conn.commit()
     finally:
         conn.close()
@@ -262,13 +264,13 @@ def get_sales_count():
         conn.close()
 
 def get_sale_details(sale_id):
-    """Get details for a specific sale"""
+    """Get details for a specific sale - FIXED: Added item_name to SELECT"""
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT sd.id, sd.item_id, i.name, i.barcode, sd.quantity, sd.price_each,
-                   (sd.quantity*sd.price_each) AS subtotal
+            SELECT sd.id, sd.item_id, i.name as item_name, i.barcode, sd.quantity, sd.price_each,
+                   (sd.quantity*sd.price_each) AS subtotal, sd.sale_id, i.purchase_price
             FROM sale_details sd
             JOIN items i ON i.id = sd.item_id
             WHERE sd.sale_id=?
@@ -401,9 +403,9 @@ def update_sale_detail(detail_id, new_quantity, price_each):
             # Update the sale detail
             cur.execute("""
                 UPDATE sale_details 
-                SET quantity=? 
+                SET quantity=?, price_each=?
                 WHERE id=?
-            """, (new_quantity, detail_id))
+            """, (new_quantity, price_each, detail_id))
             
             # Update the sale total
             cur.execute("""
@@ -416,13 +418,31 @@ def update_sale_detail(detail_id, new_quantity, price_each):
     finally:
         conn.close()
 
+def update_sale_total(sale_id):
+    """Recalculate and update sale total based on current details"""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE sales 
+            SET total_price = (
+                SELECT COALESCE(SUM(quantity * price_each), 0) 
+                FROM sale_details 
+                WHERE sale_id = ?
+            )
+            WHERE id = ?
+        """, (sale_id, sale_id))
+        conn.commit()
+    finally:
+        conn.close()
+
 def get_sale_detail_by_id(detail_id):
     """Get a specific sale detail by ID"""
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT sd.*, i.name 
+            SELECT sd.*, i.name as item_name
             FROM sale_details sd
             JOIN items i ON i.id = sd.item_id
             WHERE sd.id=?
@@ -456,7 +476,9 @@ def get_top_selling_items(limit=10):
         cur = conn.cursor()
         cur.execute("""
             SELECT i.name, i.barcode, SUM(sd.quantity) as total_sold,
-                   SUM(sd.quantity * sd.price_each) as total_revenue
+                   SUM(sd.quantity * sd.price_each) as total_revenue,
+                   SUM(sd.quantity * i.purchase_price) as total_cost,
+                   (SUM(sd.quantity * sd.price_each) - SUM(sd.quantity * i.purchase_price)) as profit
             FROM sale_details sd
             JOIN items i ON i.id = sd.item_id
             GROUP BY sd.item_id
@@ -477,7 +499,9 @@ def get_sales_summary_by_category():
             SELECT c.name as category_name, 
                    COUNT(DISTINCT sd.sale_id) as num_sales,
                    SUM(sd.quantity) as total_quantity,
-                   SUM(sd.quantity * sd.price_each) as total_revenue
+                   SUM(sd.quantity * sd.price_each) as total_revenue,
+                   SUM(sd.quantity * i.purchase_price) as total_cost,
+                   (SUM(sd.quantity * sd.price_each) - SUM(sd.quantity * i.purchase_price)) as profit
             FROM sale_details sd
             JOIN items i ON i.id = sd.item_id
             LEFT JOIN categories c ON c.id = i.category_id
@@ -486,5 +510,23 @@ def get_sales_summary_by_category():
         """)
         rows = cur.fetchall()
         return rows
+    finally:
+        conn.close()
+
+def get_profit_summary():
+    """Get overall profit summary"""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT 
+                SUM(sd.quantity * sd.price_each) as total_revenue,
+                SUM(sd.quantity * i.purchase_price) as total_cost,
+                (SUM(sd.quantity * sd.price_each) - SUM(sd.quantity * i.purchase_price)) as total_profit
+            FROM sale_details sd
+            JOIN items i ON i.id = sd.item_id
+        """)
+        row = cur.fetchone()
+        return row
     finally:
         conn.close()
