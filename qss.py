@@ -64,7 +64,7 @@ QGroupBox {
     border-radius: 12px; 
     margin-top: 16px; 
     padding-top: 8px;
-    background-color: #334155;
+    background-color: #1e293b;
     font-weight: 600;
     font-size: 12pt;
 }
@@ -73,7 +73,7 @@ QGroupBox::title {
     subcontrol-origin: margin; 
     left: 16px; 
     padding: 4px 12px;
-    background-color: #1e293b;
+    background-color: #334155;
     border: 1px solid #475569;
     border-radius: 6px;
     color: #f1f5f9;

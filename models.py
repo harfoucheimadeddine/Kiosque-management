@@ -336,6 +336,102 @@ def delete_sale(sale_id, restock=True):
     finally:
         conn.close()
 
+def delete_sale_detail(detail_id, restock=True):
+    """Delete a specific sale detail and optionally restore stock"""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        
+        if restock:
+            # Get detail info before deletion to restore stock
+            cur.execute("""
+                SELECT item_id, quantity, sale_id 
+                FROM sale_details 
+                WHERE id=?
+            """, (detail_id,))
+            detail = cur.fetchone()
+            
+            if detail:
+                # Restore stock
+                adjust_stock(detail["item_id"], detail["quantity"])
+                
+                # Update sale total
+                cur.execute("""
+                    SELECT price_each FROM sale_details WHERE id=?
+                """, (detail_id,))
+                price_detail = cur.fetchone()
+                
+                if price_detail:
+                    amount_to_subtract = detail["quantity"] * price_detail["price_each"]
+                    cur.execute("""
+                        UPDATE sales 
+                        SET total_price = total_price - ? 
+                        WHERE id=?
+                    """, (amount_to_subtract, detail["sale_id"]))
+        
+        # Delete the sale detail
+        cur.execute("DELETE FROM sale_details WHERE id=?", (detail_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def update_sale_detail(detail_id, new_quantity, price_each):
+    """Update quantity and total for a sale detail"""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        
+        # Get current detail info
+        cur.execute("""
+            SELECT quantity, sale_id 
+            FROM sale_details 
+            WHERE id=?
+        """, (detail_id,))
+        current_detail = cur.fetchone()
+        
+        if current_detail:
+            old_quantity = current_detail["quantity"]
+            sale_id = current_detail["sale_id"]
+            
+            # Calculate the difference in total price
+            old_total = old_quantity * price_each
+            new_total = new_quantity * price_each
+            total_diff = new_total - old_total
+            
+            # Update the sale detail
+            cur.execute("""
+                UPDATE sale_details 
+                SET quantity=? 
+                WHERE id=?
+            """, (new_quantity, detail_id))
+            
+            # Update the sale total
+            cur.execute("""
+                UPDATE sales 
+                SET total_price = total_price + ? 
+                WHERE id=?
+            """, (total_diff, sale_id))
+            
+            conn.commit()
+    finally:
+        conn.close()
+
+def get_sale_detail_by_id(detail_id):
+    """Get a specific sale detail by ID"""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT sd.*, i.name 
+            FROM sale_details sd
+            JOIN items i ON i.id = sd.item_id
+            WHERE sd.id=?
+        """, (detail_id,))
+        row = cur.fetchone()
+        return row
+    finally:
+        conn.close()
+
 # ---------- Analytics and Reports ----------
 def get_sales_by_date_range(start_date, end_date):
     """Get sales within date range"""

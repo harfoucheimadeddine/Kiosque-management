@@ -87,6 +87,8 @@ class Controller(MainUI):
         self.btn_sale_refresh.clicked.connect(self._load_sales_tab)
         self.btn_sale_view.clicked.connect(self._sales_view_selected)
         self.btn_sale_delete.clicked.connect(self._sales_delete_selected)
+        self.btn_sale_delete_item.clicked.connect(self._sales_delete_item)
+        self.btn_sale_update_item.clicked.connect(self._sales_update_item)
         self.tbl_sales.itemSelectionChanged.connect(self._sales_view_selected)
 
         # Settings
@@ -96,11 +98,16 @@ class Controller(MainUI):
         self._setup_responsive_tables()
 
     def _setup_autocomplete(self):
+        # Setup autocomplete with just product names, not barcodes
         all_items = models.get_items()
-        suggestions = [f"{item['name']} | {item['barcode']}" if item['barcode'] else item['name'] for item in all_items]
+        suggestions = [item['name'] for item in all_items if item['name']]
         completer = QCompleter(suggestions)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)  # Allow partial matching
         self.in_name.setCompleter(completer)
+        
+        # Connect completer selection to fill other fields
+        completer.activated.connect(self._on_autocomplete_selected)
 
     def _toggle_max_restore(self):
         if self.isMaximized():
@@ -145,7 +152,7 @@ class Controller(MainUI):
             shop_name, ok1 = QInputDialog.getText(self, "اسم المتجر", "اسم المتجر:")
             if not ok1 or not shop_name.strip():
                 shop_name = "متجري"
-            contact, _ = QInputDialog.getText(self, "م정보 الاتصال", "هاتف / بريد إلكتروني (اختياري):")
+            contact, _ = QInputDialog.getText(self, "معلومات الاتصال", "هاتف / بريد إلكتروني (اختياري):")
             location, _ = QInputDialog.getText(self, "الموقع", "العنوان / الموقع (اختياري):")
             currency, ok4 = QInputDialog.getText(self, "العملة", "اكتب رمز العملة (مثال: د.ج ، ر.س ، MAD ، USD):")
             if not ok4 or not currency.strip():
@@ -371,13 +378,27 @@ class Controller(MainUI):
             return
         self._bill_find()
 
+    def _on_autocomplete_selected(self, text):
+        """Handle when user selects an item from autocomplete"""
+        # Find the item by name
+        items = models.search_items_by_name(text)
+        if items:
+            item = items[0]
+            # Fill barcode field (not name field)
+            self.in_barcode.setText(item["barcode"] or "")
+            # Set price if not in manual mode
+            if not self.chk_manual.isChecked():
+                self.in_price.setValue(float(item["price"]))
+
     def _on_name_text_changed(self, text):
-        # Auto-search when typing in name field
-        if len(text) > 2:
+        # Auto-search when typing in name field - only fill other fields
+        if len(text) > 2 and not text.endswith(' | '):  # Avoid triggering on old autocomplete format
             items = models.search_items_by_name(text)
             if items:
+                # Only set barcode and price, never touch the name field
                 self.in_barcode.setText(items[0]["barcode"] or "")
-                self._bill_fill_from_item(items[0])
+                if not self.chk_manual.isChecked():
+                    self.in_price.setValue(float(items[0]["price"]))
 
     def _toggle_manual_price(self, state):
         """Enable/disable price field based on manual price checkbox"""
@@ -396,7 +417,21 @@ class Controller(MainUI):
                 item = items[0]
         
         if item:
-            self._bill_fill_from_item(item)
+            # FIXED: Use dictionary-style access for sqlite3.Row objects
+            current_name = self.in_name.text().strip()
+            item_barcode = item["barcode"] if "barcode" in item.keys() else ""
+            
+            # Only set name if field is empty or contains a barcode
+            if not current_name or current_name == item_barcode:
+                self.in_name.setText(item["name"])
+            
+            # Always update barcode field
+            self.in_barcode.setText(item_barcode)
+            
+            # Set price based on manual mode
+            if not self.chk_manual.isChecked():
+                self.in_price.setValue(float(item["price"]))
+                
             # Show stock information
             stock = max(0, item["stock_count"] or 0)  # Ensure stock is never negative
             if stock == int(stock):
@@ -420,15 +455,6 @@ class Controller(MainUI):
                     self.in_price.setValue(0)
                     self.in_price.setFocus()
 
-    def _bill_fill_from_item(self, item):
-        self.in_name.setText(item["name"])
-        
-        # Set price based on manual mode
-        if self.chk_manual.isChecked():
-            # Keep current price if manual mode is enabled
-            pass
-        else:
-            self.in_price.setValue(float(item["price"]))
 
     def _add_custom_item(self):
         """Add a custom item to the database from bill tab"""
@@ -566,7 +592,7 @@ class Controller(MainUI):
         self.tbl_bill.setItem(row, 2, QTableWidgetItem(fmt_money(price)))
         self.tbl_bill.setItem(row, 3, QTableWidgetItem(fmt_qty(qty)))
         self.tbl_bill.setItem(row, 4, QTableWidgetItem(fmt_money(total)))
-        self.tbl_bill.setItem(row, 5, QTableWidgetItem(str(item["id"])))
+        self.tbl_bill.setItem(row, 5, QTableWidgetItem(str(item["id"])))  # Store item ID
         
         # Add to internal tracking
         self.current_bill_items.append({
@@ -597,192 +623,259 @@ class Controller(MainUI):
         if row is None:
             self.msg("تنبيه", "اختر صفًا للحذف.")
             return
-        
-        # Get the item to be removed
-        item_to_remove = self.current_bill_items[row]
-        
-        # Remove from table and internal tracking
         self.tbl_bill.removeRow(row)
-        self.current_bill_items.pop(row)
-        
-        # Recalculate total
+        if row < len(self.current_bill_items):
+            self.current_bill_items.pop(row)
         self._bill_recalc_total()
-        
-        # Show confirmation message
-        self.msg("تم", f"تم حذف {item_to_remove['name']} من الفاتورة.")
 
     def _bill_recalc_total(self):
-        total = sum(item["total"] for item in self.current_bill_items)
-        self.lbl_total.setText(f"الإجمالي: {fmt_money(total)} {self.currency}")
+        total = 0
+        for i in range(self.tbl_bill.rowCount()):
+            total += float(self.tbl_bill.item(i, 4).text())
+        self.lbl_total.setText(f"{fmt_money(total)} {self.currency}")
 
     def _bill_save(self):
-        if not self.current_bill_items:
-            self.msg("تنبيه", "لا توجد عناصر في الفاتورة.")
+        if self.tbl_bill.rowCount() == 0:
+            self.msg("تنبيه", "لا توجد أصناف في الفاتورة.")
             return
-        
-        # Calculate total (include custom items)
-        total = sum(item["total"] for item in self.current_bill_items)
-        
-        # Create sale record
-        sale_id = models.add_sale(total)
-        
-        # Add sale details and update stock (only for database items)
-        for item in self.current_bill_items:
-            if not item.get("is_custom", False):  # Only database items
-                models.add_sale_detail(sale_id, item["id"], item["qty"], item["price"])
-                models.adjust_stock(item["id"], -item["qty"])  # Subtract from stock
-        
-        self.msg("تم", f"تم حفظ الفاتورة رقم {sale_id}.")
-        
-        # Clear bill
-        self.tbl_bill.setRowCount(0)
-        self.current_bill_items = []
-        self._bill_recalc_total()
-        
-        # Refresh stock and sales tables
-        self._load_stock_table()
-        self._load_sales_tab()
+        try:
+            # Create sale record
+            total = sum(float(self.tbl_bill.item(i, 4).text()) for i in range(self.tbl_bill.rowCount()))
+            sale_id = models.add_sale(total)
+            
+            # Add sale details
+            for i in range(self.tbl_bill.rowCount()):
+                item_id = self.tbl_bill.item(i, 5).text()
+                if item_id == "CUSTOM":
+                    continue  # Skip custom items (not in database)
+                
+                price_each = float(self.tbl_bill.item(i, 2).text())
+                quantity = float(self.tbl_bill.item(i, 3).text())
+                models.add_sale_detail(sale_id, int(item_id), quantity, price_each)
+            
+            # Clear bill
+            self.tbl_bill.setRowCount(0)
+            self.current_bill_items.clear()
+            self._bill_recalc_total()
+            
+            # Show success message
+            self.msg("تم", f"تم حفظ الفاتورة رقم {sale_id}.")
+            
+            # Refresh sales tab
+            self._load_sales_tab()
+            
+        except Exception as e:
+            QMessageBox.warning(self, "خطأ", f"تعذر حفظ الفاتورة:\n{e}")
 
     def _bill_print(self):
-        if not self.current_bill_items:
-            self.msg("تنبيه", "لا توجد عناصر في الفاتورة للطباعة.")
+        if self.tbl_bill.rowCount() == 0:
+            self.msg("تنبيه", "لا توجد أصناف في الفاتورة للطباعة.")
             return
         
-        # Create HTML receipt
+        # Create printer and dialog
+        printer = QPrinter(QPrinter.HighResolution)
+        dialog = QPrintDialog(printer, self)
+        if dialog.exec_() != QPrintDialog.Accepted:
+            return
+        
+        # Create HTML content for receipt
         html = f"""
         <html>
-        <body style='font-family: Arial; text-align: right; direction: rtl;'>
-            <h2>{self.lbl_title.text()}</h2>
-            <p>{self.sett_contact.text()}</p>
-            <p>{self.sett_location.text()}</p>
-            <hr>
-            <h3>فاتورة بيع</h3>
-            <p>التاريخ: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
-            <table width='100%' border='1' cellpadding='5'>
+        <head>
+        <meta charset="UTF-8">
+        <style>
+            body {{ font-family: Arial, sans-serif; direction: rtl; text-align: right; }}
+            .header {{ text-align: center; margin-bottom: 20px; }}
+            .shop-name {{ font-size: 20px; font-weight: bold; }}
+            .contact {{ font-size: 14px; }}
+            .receipt-info {{ margin: 10px 0; }}
+            .items-table {{ width: 100%; border-collapse: collapse; margin: 15px 0; }}
+            .items-table th, .items-table td {{ border: 1px solid #000; padding: 5px; }}
+            .total {{ font-weight: bold; font-size: 16px; margin-top: 10px; }}
+            .footer {{ margin-top: 20px; text-align: center; font-size: 12px; }}
+        </style>
+        </head>
+        <body>
+            <div class="header">
+                <div class="shop-name">{self.lbl_title.text()}</div>
+                <div class="contact">{self.sett_contact.text()}</div>
+                <div class="contact">{self.sett_location.text()}</div>
+            </div>
+            
+            <div class="receipt-info">
+                <div>التاريخ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
+            </div>
+            
+            <table class="items-table">
                 <tr>
-                    <th>الاسم</th>
+                    <th>الصنف</th>
                     <th>السعر</th>
                     <th>الكمية</th>
-                    <th>الإجمالي</th>
+                    <th>المجموع</th>
                 </tr>
         """
         
-        for item in self.current_bill_items:
+        # Add items to receipt
+        for i in range(self.tbl_bill.rowCount()):
+            name = self.tbl_bill.item(i, 1).text()
+            price = self.tbl_bill.item(i, 2).text()
+            qty = self.tbl_bill.item(i, 3).text()
+            total = self.tbl_bill.item(i, 4).text()
+            
             html += f"""
                 <tr>
-                    <td>{item['name']}</td>
-                    <td>{fmt_money(item['price'])} {self.currency}</td>
-                    <td>{fmt_qty(item['qty'])}</td>
-                    <td>{fmt_money(item['total'])} {self.currency}</td>
+                    <td>{name}</td>
+                    <td>{price}</td>
+                    <td>{qty}</td>
+                    <td>{total}</td>
                 </tr>
             """
         
-        total = sum(item["total"] for item in self.current_bill_items)
+        # Add total
+        total = self.lbl_total.text()
         html += f"""
-                <tr>
-                    <td colspan='3' style='text-align: left;'><b>الإجمالي</b></td>
-                    <td><b>{fmt_money(total)} {self.currency}</b></td>
-                </tr>
             </table>
-            <hr>
-            <p>شكرًا لزيارتكم</p>
+            
+            <div class="total">الإجمالي: {total}</div>
+            
+            <div class="footer">
+                شكرًا لزيارتكم<br>
+                {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            </div>
         </body>
         </html>
         """
         
-        # Print dialog
-        printer = QPrinter()
-        dialog = QPrintDialog(printer, self)
-        if dialog.exec_() == QPrintDialog.Accepted:
-            doc = QTextDocument()
-            doc.setHtml(html)
-            doc.print_(printer)
+        # Print the document
+        doc = QTextDocument()
+        doc.setHtml(html)
+        doc.print_(printer)
 
     def _show_scanner_info(self):
-        """Show information about barcode scanner"""
         info = """
-        معلومات الماسح الضوئي:
+        دعم الباركود:
+        - يمكنك مسح الباركود مباشرة في حقل الباركود
+        - يدعم النظام الباركود بطول 8، 12، 13 رقمًا
+        - اضغط Enter بعد مسح الباركود للبحث تلقائيًا
         
-        - يمكنك استخدام ماسح باركود خارجي (USB)
-        - أو استخدام كاميرا الجهاز للمسح الضوئي
-        - أو إدخال الباركود يدويًا
+        خيارات البحث:
+        - البحث بالباركود (الأولوية)
+        - البحث بالاسم (إذا لم يتم إدخال باركود)
+        - الضغط على زر البحث أو Enter للبحث
         
-        صيغ الباركود المدعومة:
-        - EAN-13 (13 رقم)
-        - UPC-A (12 رقم) 
-        - EAN-8 (8 رقم)
+        إضافة صنف مخصص:
+        - إذا لم يكن المنتج في قاعدة البيانات
+        - يمكنك إضافته كمنتج مخصص
+        - سيتم حفظه مؤقتًا في الفاتورة فقط
         """
-        QMessageBox.information(self, "معلومات الماسح", info)
+        QMessageBox.information(self, "معلومات الماسح الضوئي", info)
 
     # Sales Methods
     def _load_sales_tab(self):
-        # Load sales summary
-        total_sales = models.get_sales_total()
-        today_sales = models.get_sales_summary_today()
-        latest_sale = models.get_latest_sale()
-        
-        self.lbl_total_sales.setText(f"إجمالي المبيعات: {fmt_money(total_sales)} {self.currency}")
-        self.lbl_today_sales.setText(f"مبيعات اليوم: {fmt_money(today_sales)} {self.currency}")
-        
-        if latest_sale:
-            self.lbl_latest_sale.setText(f"آخر عملية: #{latest_sale['id']} - {fmt_money(latest_sale['total_price'])} {self.currency} - {latest_sale['datetime']}")
-        else:
-            self.lbl_latest_sale.setText("آخر عملية: -")
-        
-        # Load sales table
         sales = models.get_sales()
         self.tbl_sales.setRowCount(0)
-        for s in sales:
+        for r in sales:
             row = self.tbl_sales.rowCount()
             self.tbl_sales.insertRow(row)
-            self.tbl_sales.setItem(row, 0, QTableWidgetItem(str(s["id"])))
-            self.tbl_sales.setItem(row, 1, QTableWidgetItem(s["datetime"]))
-            self.tbl_sales.setItem(row, 2, QTableWidgetItem(fmt_money(s["total_price"])))
-        
+            self.tbl_sales.setItem(row, 0, QTableWidgetItem(str(r["id"])))
+            self.tbl_sales.setItem(row, 1, QTableWidgetItem(r["datetime"]))
+            self.tbl_sales.setItem(row, 2, QTableWidgetItem(f"{fmt_money(r['total_price'])} {self.currency}"))
+            self.tbl_sales.setRowHeight(row, 35)
         self._update_table_responsiveness()
 
     def _sales_view_selected(self):
         row = self._selected_row(self.tbl_sales)
         if row is None:
+            self.tbl_sale_details.setRowCount(0)
             return
-        
         sale_id = int(self.tbl_sales.item(row, 0).text())
         details = models.get_sale_details(sale_id)
-        
         self.tbl_sale_details.setRowCount(0)
-        for d in details:
-            row = self.tbl_sale_details.rowCount()
-            self.tbl_sale_details.insertRow(row)
-            self.tbl_sale_details.setItem(row, 0, QTableWidgetItem(str(d["id"])))
-            self.tbl_sale_details.setItem(row, 1, QTableWidgetItem(d["name"]))
-            self.tbl_sale_details.setItem(row, 2, QTableWidgetItem(fmt_qty(d["quantity"])))
-            self.tbl_sale_details.setItem(row, 3, QTableWidgetItem(fmt_money(d["price_each"])))
-            self.tbl_sale_details.setItem(row, 4, QTableWidgetItem(fmt_money(d["subtotal"])))
-            self.tbl_sale_details.setItem(row, 5, QTableWidgetItem(d["barcode"] or ""))
-        
+        for r in details:
+            row_det = self.tbl_sale_details.rowCount()
+            self.tbl_sale_details.insertRow(row_det)
+            self.tbl_sale_details.setItem(row_det, 0, QTableWidgetItem(str(r["id"])))
+            self.tbl_sale_details.setItem(row_det, 1, QTableWidgetItem(r["item_name"]))
+            self.tbl_sale_details.setItem(row_det, 2, QTableWidgetItem(fmt_money(r["price_each"])))
+            self.tbl_sale_details.setItem(row_det, 3, QTableWidgetItem(fmt_qty(r["quantity"])))
+            self.tbl_sale_details.setItem(row_det, 4, QTableWidgetItem(fmt_money(r["price_each"] * r["quantity"])))
+            self.tbl_sale_details.setItem(row_det, 5, QTableWidgetItem(str(r["item_id"])))
+            self.tbl_sale_details.setItem(row_det, 6, QTableWidgetItem(str(r["sale_id"])))
+            self.tbl_sale_details.setRowHeight(row_det, 35)
         self._update_table_responsiveness()
 
     def _sales_delete_selected(self):
         row = self._selected_row(self.tbl_sales)
         if row is None:
-            self.msg("تنبيه", "اختر عملية للحذف.")
+            self.msg("تنبيه", "اختر فاتورة للحذف.")
             return
-        
         sale_id = int(self.tbl_sales.item(row, 0).text())
-        confirm = QMessageBox.question(self, "تأكيد", "سيتم حذف العملية وإرجاع المخزون.\nهل أنت متأكد؟")
-        
+        confirm = QMessageBox.question(self, "تأكيد", "سيتم حذف الفاتورة وكل تفاصيلها.\nهل أنت متأكد؟")
         if confirm == QMessageBox.Yes:
             try:
-                models.delete_sale(sale_id, restock=True)
-                self.msg("تم", "تم حذف العملية وإرجاع المخزون.")
+                models.delete_sale(sale_id)
                 self._load_sales_tab()
-                self._load_stock_table()
+                self.tbl_sale_details.setRowCount(0)
+                self.msg("تم", "تم حذف الفاتورة.")
             except Exception as e:
-                QMessageBox.warning(self, "خطأ", f"تعذر حذف العملية:\n{e}")
+                QMessageBox.warning(self, "خطأ", f"تعذر حذف الفاتورة:\n{e}")
+
+    def _sales_delete_item(self):
+        row = self._selected_row(self.tbl_sale_details)
+        if row is None:
+            self.msg("تنبيه", "اختر صنفًا للحذف.")
+            return
+        detail_id = int(self.tbl_sale_details.item(row, 0).text())
+        confirm = QMessageBox.question(self, "تأكيد", "هل تريد حذف هذا الصنف من الفاتورة؟")
+        if confirm == QMessageBox.Yes:
+            try:
+                models.delete_sale_detail(detail_id)
+                self._sales_view_selected()  # Refresh
+                self.msg("تم", "تم حذف الصنف.")
+            except Exception as e:
+                QMessageBox.warning(self, "خطأ", f"تعذر حذف الصنف:\n{e}")
+
+    def _sales_update_item(self):
+        row = self._selected_row(self.tbl_sale_details)
+        if row is None:
+            self.msg("تنبيه", "اختر صنفًا للتعديل.")
+            return
+        detail_id = int(self.tbl_sale_details.item(row, 0).text())
+        item_id = int(self.tbl_sale_details.item(row, 5).text())
+        sale_id = int(self.tbl_sale_details.item(row, 6).text())
+        
+        # Get current values
+        current_qty = float(self.tbl_sale_details.item(row, 3).text())
+        current_price = float(self.tbl_sale_details.item(row, 2).text())
+        
+        # Show dialog for new values
+        new_qty, ok1 = QInputDialog.getDouble(self, "الكمية الجديدة", "الكمية:", current_qty, 0.1, 1000, 1)
+        new_price, ok2 = QInputDialog.getDouble(self, "السعر الجديد", f"السعر ({self.currency}):", current_price, 0.01, 100000, 2)
+        
+        if ok1 and ok2:
+            try:
+                models.update_sale_detail(detail_id, new_qty, new_price)
+                models.update_sale_total(sale_id)
+                self._load_sales_tab()
+                self._sales_view_selected()
+                self.msg("تم", "تم تعديل الصنف.")
+            except Exception as e:
+                QMessageBox.warning(self, "خطأ", f"تعذر تعديل الصنف:\n{e}")
 
     # Utility
     def _selected_row(self, table):
-        rows = table.selectionModel().selectedRows()
-        if not rows:
+        selected = table.selectedItems()
+        if not selected:
             return None
-        return rows[0].row()
+        return selected[0].row()
+
+    def msg(self, title, text):
+        QMessageBox.information(self, title, text)
+
+    def set_preview_image(self, path):
+        if not path or not os.path.exists(path):
+            self.lbl_preview.setText("(لا توجد صورة)")
+            self.lbl_preview.setStyleSheet("color: gray;")
+            return
+        self.lbl_preview.setText(f"📷 {os.path.basename(path)}")
+        self.lbl_preview.setStyleSheet("color: blue; text-decoration: underline;")

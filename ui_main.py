@@ -632,6 +632,24 @@ class MainUI(QWidget):
         self.tbl_sale_details.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         details_layout.addWidget(self.tbl_sale_details)
+        
+        # Sale details action buttons
+        details_btn_row = QHBoxLayout()
+        details_btn_row.setSpacing(10)
+        
+        self.btn_sale_update_item = QPushButton("تعديل كمية الصنف المحدد")
+        self.btn_sale_update_item.setObjectName("secondary")
+        self.btn_sale_update_item.setMinimumHeight(40)
+        
+        self.btn_sale_delete_item = QPushButton("حذف الصنف المحدد من العملية")
+        self.btn_sale_delete_item.setObjectName("danger")
+        self.btn_sale_delete_item.setMinimumHeight(40)
+        
+        details_btn_row.addWidget(self.btn_sale_update_item)
+        details_btn_row.addWidget(self.btn_sale_delete_item)
+        details_btn_row.addStretch()
+        
+        details_layout.addLayout(details_btn_row)
         outer.addWidget(details_group)
 
         self.tabs.addTab(tab, "المبيعات")
