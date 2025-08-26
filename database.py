@@ -1,4 +1,4 @@
-# database.py (fixed typo and added purchase_price column)
+# database.py (fixed with subtotal column in sale_details table and new purchase price columns)
 import sqlite3
 import os
 import threading
@@ -14,7 +14,7 @@ def get_connection():
     - WAL mode: Better concurrency for read/write.
     """
     conn = sqlite3.connect(DB_NAME, timeout=30)  # Increased timeout for large datasets
-    conn.row_factory = sqlite3.Row  # Fixed: Changed RRow to Row
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")       # Allows concurrent reads during writes
     conn.execute("PRAGMA synchronous = NORMAL;")     # Good balance of safety and performance
@@ -88,17 +88,18 @@ def setup_database():
     );
     """)
 
-    # Sales table
+    # Sales table - Updated with total_purchase_price
     cur.execute("""
     CREATE TABLE IF NOT EXISTS sales (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         datetime TEXT NOT NULL,
         total_price REAL NOT NULL DEFAULT 0,
+        total_purchase_price REAL NOT NULL DEFAULT 0, -- NEW: Added for profit calculation
         created_at TEXT
     );
     """)
 
-    # Sale details table
+    # Sale details table - FIXED: Added subtotal column, NEW: purchase_price_each
     cur.execute("""
     CREATE TABLE IF NOT EXISTS sale_details (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,6 +107,8 @@ def setup_database():
         item_id INTEGER NOT NULL,
         quantity REAL NOT NULL,
         price_each REAL NOT NULL,
+        subtotal REAL NOT NULL DEFAULT 0,
+        purchase_price_each REAL NOT NULL DEFAULT 0, -- NEW: Added to record purchase price at sale time
         created_at TEXT,
         FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE,
         FOREIGN KEY (item_id) REFERENCES items(id) -- Will migrate to CASCADE
@@ -120,12 +123,46 @@ def setup_database():
         cur.execute("ALTER TABLE items ADD COLUMN purchase_price REAL NOT NULL DEFAULT 0")
         conn.commit()
 
+    # Add subtotal column to sale_details if it doesn't exist
+    if not _table_has_column(conn, 'sale_details', 'subtotal'):
+        print("Adding subtotal column to sale_details table...")
+        cur.execute("ALTER TABLE sale_details ADD COLUMN subtotal REAL NOT NULL DEFAULT 0")
+        # Calculate subtotal for existing records
+        cur.execute("UPDATE sale_details SET subtotal = quantity * price_each WHERE subtotal = 0")
+        conn.commit()
+    
+    # Add purchase_price_each column to sale_details if it doesn't exist
+    if not _table_has_column(conn, 'sale_details', 'purchase_price_each'):
+        print("Adding purchase_price_each column to sale_details table...")
+        cur.execute("ALTER TABLE sale_details ADD COLUMN purchase_price_each REAL NOT NULL DEFAULT 0")
+        # Populate with current item purchase prices for existing records
+        cur.execute("""
+            UPDATE sale_details
+            SET purchase_price_each = (SELECT i.purchase_price FROM items i WHERE i.id = sale_details.item_id)
+            WHERE purchase_price_each = 0;
+        """)
+        conn.commit()
+
+    # Add total_purchase_price column to sales if it doesn't exist
+    if not _table_has_column(conn, 'sales', 'total_purchase_price'):
+        print("Adding total_purchase_price column to sales table...")
+        cur.execute("ALTER TABLE sales ADD COLUMN total_purchase_price REAL NOT NULL DEFAULT 0")
+        # Populate total_purchase_price for existing sales
+        cur.execute("""
+            UPDATE sales
+            SET total_purchase_price = (
+                SELECT COALESCE(SUM(sd.quantity * sd.purchase_price_each), 0)
+                FROM sale_details sd
+                WHERE sd.sale_id = sales.id
+            )
+            WHERE total_purchase_price = 0;
+        """)
+        conn.commit()
+
     # Check if created_at column exists in sales table, add if not
     if not _table_has_column(conn, 'sales', 'created_at'):
         print("Adding created_at column to sales table...")
-        # First add the column without default value
         cur.execute("ALTER TABLE sales ADD COLUMN created_at TEXT")
-        # Update existing records with current timestamp
         current_time = datetime.now().isoformat()
         cur.execute("UPDATE sales SET created_at = ? WHERE created_at IS NULL", (current_time,))
         conn.commit()
@@ -133,9 +170,7 @@ def setup_database():
     # Check if created_at column exists in sale_details table, add if not
     if not _table_has_column(conn, 'sale_details', 'created_at'):
         print("Adding created_at column to sale_details table...")
-        # First add the column without default value
         cur.execute("ALTER TABLE sale_details ADD COLUMN created_at TEXT")
-        # Update existing records with current timestamp
         current_time = datetime.now().isoformat()
         cur.execute("UPDATE sale_details SET created_at = ? WHERE created_at IS NULL", (current_time,))
         conn.commit()
@@ -143,9 +178,7 @@ def setup_database():
     # Check if created_at column exists in categories table, add if not
     if not _table_has_column(conn, 'categories', 'created_at'):
         print("Adding created_at column to categories table...")
-        # First add the column without default value
         cur.execute("ALTER TABLE categories ADD COLUMN created_at TEXT")
-        # Update existing records with current timestamp
         current_time = datetime.now().isoformat()
         cur.execute("UPDATE categories SET created_at = ? WHERE created_at IS NULL", (current_time,))
         conn.commit()
@@ -153,19 +186,29 @@ def setup_database():
     # Check if updated_at column exists in items table, add if not
     if not _table_has_column(conn, 'items', 'updated_at'):
         print("Adding updated_at column to items table...")
-        # First add the column without default value
         cur.execute("ALTER TABLE items ADD COLUMN updated_at TEXT")
-        # Update existing records with current timestamp
         current_time = datetime.now().isoformat()
         cur.execute("UPDATE items SET updated_at = ? WHERE updated_at IS NULL", (current_time,))
         conn.commit()
 
     # Ensure CASCADE for item_id in sale_details
-    if not _table_has_item_fk_cascade_on_sale_details(conn):
-        print("Migrating sale_details table to add CASCADE foreign key...")
-        cur.execute("PRAGMA foreign_keys = OFF;")
-        conn.commit()
+    # This migration step is a bit more involved due to SQLite's ALTER TABLE limitations.
+    # We will create a new table, copy data, drop the old, and rename the new.
+    # This step is critical for proper deletion cascades.
+    cur.execute("PRAGMA foreign_keys = OFF;")
+    conn.commit()
 
+    cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='sale_details';")
+    current_sale_details_schema = cur.fetchone()
+    
+    # Check if the existing sale_details table already has ON DELETE CASCADE for item_id
+    needs_rebuild = True
+    if current_sale_details_schema:
+        if "FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE" in current_sale_details_schema['sql']:
+            needs_rebuild = False
+
+    if needs_rebuild:
+        print("Migrating sale_details table to add CASCADE foreign key for items...")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS _sale_details_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,26 +216,38 @@ def setup_database():
             item_id INTEGER NOT NULL,
             quantity REAL NOT NULL,
             price_each REAL NOT NULL,
+            subtotal REAL NOT NULL DEFAULT 0,
+            purchase_price_each REAL NOT NULL DEFAULT 0,
             created_at TEXT,
             FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE,
             FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
         );
         """)
 
-        # Copy data
+        # Copy data, including existing subtotal and purchase_price_each (if they exist)
+        # Use COALESCE for created_at and default values for new columns
         cur.execute("""
-        INSERT INTO _sale_details_new (id, sale_id, item_id, quantity, price_each, created_at)
-        SELECT id, sale_id, item_id, quantity, price_each, COALESCE(created_at, datetime('now'))
+        INSERT INTO _sale_details_new (id, sale_id, item_id, quantity, price_each, subtotal, purchase_price_each, created_at)
+        SELECT 
+            id, 
+            sale_id, 
+            item_id, 
+            quantity, 
+            price_each, 
+            COALESCE(subtotal, quantity * price_each), 
+            COALESCE(purchase_price_each, 0), -- Default to 0 if column didn't exist
+            COALESCE(created_at, datetime('now'))
         FROM sale_details;
         """)
 
         cur.execute("DROP TABLE sale_details;")
         cur.execute("ALTER TABLE _sale_details_new RENAME TO sale_details;")
         conn.commit()
-
-        cur.execute("PRAGMA foreign_keys = ON;")
-        conn.commit()
         print("Migration completed successfully.")
+
+    cur.execute("PRAGMA foreign_keys = ON;")
+    conn.commit()
+
 
     # Create indexes for performance
     indexes = [
@@ -202,9 +257,12 @@ def setup_database():
         "CREATE INDEX IF NOT EXISTS idx_sales_datetime ON sales(datetime);",
         "CREATE INDEX IF NOT EXISTS idx_sale_details_sale_id ON sale_details(sale_id);",
         "CREATE INDEX IF NOT EXISTS idx_sale_details_item_id ON sale_details(item_id);",
-        "CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);",  # Added for faster search
-        "CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at);",  # Added for faster date queries
-        "CREATE INDEX IF NOT EXISTS idx_items_purchase_price ON items(purchase_price);",  # Added for purchase price queries
+        "CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);",
+        "CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at);",
+        "CREATE INDEX IF NOT EXISTS idx_items_purchase_price ON items(purchase_price);",
+        "CREATE INDEX IF NOT EXISTS idx_sale_details_subtotal ON sale_details(subtotal);",
+        "CREATE INDEX IF NOT EXISTS idx_sale_details_purchase_price_each ON sale_details(purchase_price_each);",
+        "CREATE INDEX IF NOT EXISTS idx_sales_total_purchase_price ON sales(total_purchase_price);"
     ]
     for sql in indexes:
         try:
